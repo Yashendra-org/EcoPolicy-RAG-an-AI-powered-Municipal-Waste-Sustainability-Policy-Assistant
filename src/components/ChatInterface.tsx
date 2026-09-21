@@ -102,34 +102,30 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onIngestClick }) =
     setLoading(true);
 
     try {
-      // Connect to secure FastAPI backend
-      const res = await fetch('http://127.0.0.1:8000/api/query', {
+      // Connect to Express Multi-Agent RAG pipeline
+      const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-API-Key': 'ECO_RAG_SECURE_KEY_2026' // Must match the backend API_SECRET_KEY
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q.trim() })
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Failed to generate response');
+      if (!res.ok) throw new Error(data.error || data.detail || 'Failed to generate response');
 
       const assistantMsg: RAGMessage = {
         id: `assistant-${Date.now()}`,
         sender: 'assistant',
-        text: data.synthesized_answer || data.answer,
+        text: data.answer || data.synthesized_answer,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        // Map FastAPI source texts into the existing Chunk structure
-        retrievedChunks: data.sources ? data.sources.map((src: string, i: number) => ({
+        retrievedChunks: data.retrievedChunks || (data.sources ? data.sources.map((src: string, i: number) => ({
           id: `src-${i}`,
-          documentId: 'fastapi-backend',
-          documentTitle: 'Municipal Policy DB',
+          documentId: 'policy-corpus',
+          documentTitle: 'Municipal Policy Guidelines',
           clause: `Retrieved Excerpt ${i + 1}`,
           text: src
-        })) : [],
+        })) : []),
         processingTimeMs: data.processingTimeMs || 0,
-        modelUsed: data.modelUsed || 'FastAPI Secure RAG',
+        modelUsed: data.modelUsed || 'EcoPolicy Multi-Agent Engine',
         guardrailTriggered: data.guardrailTriggered || false
       };
 
