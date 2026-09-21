@@ -12,7 +12,7 @@ export const PolicyLibrary: React.FC<PolicyLibraryProps> = ({ bylaws, onIngestCl
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [activeBylaw, setActiveBylaw] = useState<BylawDocument | null>(null);
 
-  const categories = ['All', 'Waste Management', 'Energy & Buildings', 'Water & Stormwater', 'Hazardous & E-Waste'];
+  const categories = ['All', 'Waste Management', 'Energy & Buildings', 'Water & Stormwater', 'Hazardous & E-Waste', 'Urban Ecology'];
 
   const filteredBylaws = bylaws.filter(b => {
     const matchesSearch = b.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
