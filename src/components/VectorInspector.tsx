@@ -10,6 +10,8 @@ export const VectorInspector: React.FC<VectorInspectorProps> = ({ bylaws }) => {
   const [stats, setStats] = useState<VectorStoreStats | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // BUG 12 FIX: remove bylaws from deps — stats should only be fetched once on mount,
+  // not every time the parent re-renders with a new bylaws array reference
   useEffect(() => {
     fetch('/api/stats')
       .then(res => res.json())
@@ -21,7 +23,7 @@ export const VectorInspector: React.FC<VectorInspectorProps> = ({ bylaws }) => {
         console.error("Failed to load stats", err);
         setLoading(false);
       });
-  }, [bylaws]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
