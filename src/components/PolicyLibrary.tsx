@@ -121,9 +121,16 @@ export const PolicyLibrary: React.FC<PolicyLibraryProps> = ({ bylaws, onIngestCl
       )}
 
       {/* Bylaw Detail Modal */}
+      {/* BUG 11 FIX: clicking backdrop (outer div) closes modal; stopPropagation on inner div prevents accidental close */}
       {activeBylaw && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-3xl max-h-[90vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-fadeIn">
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-xs"
+          onClick={() => setActiveBylaw(null)}
+        >
+          <div
+            className="bg-white w-full max-w-3xl max-h-[90vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-fadeIn"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
             <div className="bg-emerald-950 text-white p-6 flex items-center justify-between">
               <div>
