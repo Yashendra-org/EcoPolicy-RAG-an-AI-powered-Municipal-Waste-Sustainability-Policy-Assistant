@@ -1,0 +1,6 @@
+{
+  "name": "EcoPolicy RAG",
+  "description": "Expert municipal sustainability, waste management bylaws, and environmental regulations assistant powered by RAG.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
