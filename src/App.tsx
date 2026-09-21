@@ -12,6 +12,8 @@ export default function App() {
   const [bylaws, setBylaws] = useState<BylawDocument[]>([]);
   const [isIngestOpen, setIsIngestOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  // BUG 14 FIX: source totalChunks from /api/stats (live server value) not from stale seed chunksCount fields
+  const [totalChunks, setTotalChunks] = useState(0);
 
   const loadBylaws = () => {
     fetch('/api/bylaws')
@@ -26,11 +28,22 @@ export default function App() {
       });
   };
 
+  const loadStats = () => {
+    fetch('/api/stats')
+      .then(res => res.json())
+      .then(data => setTotalChunks(data.totalChunks ?? 0))
+      .catch(() => {/* silent — header stat is non-critical */});
+  };
+
   useEffect(() => {
     loadBylaws();
+    loadStats();
   }, []);
 
-  const totalChunks = bylaws.reduce((acc, b) => acc + b.chunksCount, 0);
+  // Refresh stats whenever bylaws list changes (e.g. after ingestion)
+  useEffect(() => {
+    if (!loading) loadStats();
+  }, [bylaws]);
 
   if (loading) {
     return (
