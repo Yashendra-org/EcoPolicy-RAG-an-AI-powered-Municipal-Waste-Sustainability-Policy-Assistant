@@ -7,15 +7,35 @@ interface IngestionModalProps {
   onSuccess: () => void;
 }
 
+// BUG 9 FIX: extract reset helper so form is always cleared on close
+type CategoryType = 'Waste Management' | 'Energy & Buildings' | 'Water & Stormwater' | 'Hazardous & E-Waste' | 'Urban Ecology';
+
 export const IngestionModal: React.FC<IngestionModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState<'Waste Management' | 'Energy & Buildings' | 'Water & Stormwater' | 'Hazardous & E-Waste' | 'Urban Ecology'>('Waste Management');
+  const [category, setCategory] = useState<CategoryType>('Waste Management');
   const [code, setCode] = useState('');
   const [summary, setSummary] = useState('');
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // BUG 9 FIX: reset all form fields when modal closes
+  const resetForm = () => {
+    setTitle('');
+    setCategory('Waste Management');
+    setCode('');
+    setSummary('');
+    setContent('');
+    setSubmitting(false);
+    setSuccessMsg('');
+    setErrorMsg('');
+  };
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
 
   if (!isOpen) return null;
 
@@ -48,7 +68,7 @@ export const IngestionModal: React.FC<IngestionModalProps> = ({ isOpen, onClose,
       setSuccessMsg(`Successfully ingested "${title}" into ChromaDB with ${data.chunksCreated} vector chunks!`);
       setTimeout(() => {
         onSuccess();
-        onClose();
+        handleClose(); // BUG 9 FIX: reset form on success close
       }, 1500);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to ingest document.');
@@ -87,7 +107,7 @@ SECTION 2: REPLACEMENT & COMPENSATION MANDATE
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="w-10 h-10 rounded-full bg-emerald-900 hover:bg-emerald-800 text-white flex items-center justify-center transition-colors"
           >
             <X className="w-5 h-5" />
@@ -149,9 +169,10 @@ SECTION 2: REPLACEMENT & COMPENSATION MANDATE
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-stone-700 mb-1">Category</label>
+              {/* BUG 10 FIX: proper type for select onChange */}
               <select
                 value={category}
-                onChange={(e: any) => setCategory(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setCategory(e.target.value as CategoryType)}
                 className="w-full px-3.5 py-2 border border-stone-200 rounded-xl focus:outline-none focus:border-emerald-600 bg-white"
               >
                 <option value="Waste Management">Waste Management</option>
@@ -191,7 +212,7 @@ SECTION 2: REPLACEMENT & COMPENSATION MANDATE
           <div className="pt-4 flex items-center justify-end space-x-3 border-t border-stone-200">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleClose}
               className="px-4 py-2 border border-stone-200 rounded-xl text-stone-700 hover:bg-stone-50 font-medium"
             >
               Cancel
