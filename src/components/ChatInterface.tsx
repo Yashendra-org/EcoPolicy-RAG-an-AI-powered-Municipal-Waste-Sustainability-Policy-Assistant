@@ -2,6 +2,31 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Sparkles, FileText, CheckCircle2, ShieldAlert, Cpu, ChevronDown, ChevronUp, RefreshCw, Layers, Download, Copy, Check } from 'lucide-react';
 import { RAGMessage, Chunk } from '../types';
 
+// BUG 5 FIX: lightweight inline markdown renderer (bold, italic, code, hr)
+function renderMarkdown(text: string): React.ReactNode[] {
+  const lines = text.split('\n');
+  return lines.map((line, li) => {
+    // horizontal rule
+    if (/^---+$/.test(line.trim())) {
+      return <hr key={li} className="border-stone-200 my-2" />;
+    }
+    // parse inline bold/italic/code within a line
+    const parts: React.ReactNode[] = [];
+    const regex = /(\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`)/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(line)) !== null) {
+      if (m.index > last) parts.push(line.slice(last, m.index));
+      if (m[2] !== undefined) parts.push(<strong key={m.index}>{m[2]}</strong>);
+      else if (m[3] !== undefined) parts.push(<em key={m.index}>{m[3]}</em>);
+      else if (m[4] !== undefined) parts.push(<code key={m.index} className="bg-stone-100 px-1 rounded text-[11px] font-mono">{m[4]}</code>);
+      last = m.index + m[0].length;
+    }
+    if (last < line.length) parts.push(line.slice(last));
+    return <span key={li} className="block">{parts.length ? parts : '\u00A0'}</span>;
+  });
+}
+
 interface ChatInterfaceProps {
   onIngestClick: () => void;
 }
@@ -35,12 +60,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onIngestClick }) =
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // BUG 7 FIX: wrap clipboard in try/catch for insecure-context fallback
   const handleCopyMessage = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedMsgId(id);
-    setTimeout(() => {
-      setCopiedMsgId(null);
-    }, 2000);
+    try {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopiedMsgId(id);
+        setTimeout(() => setCopiedMsgId(null), 2000);
+      }).catch(() => {
+        // fallback for browsers that reject the promise
+        const el = document.createElement('textarea');
+        el.value = text;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+        setCopiedMsgId(id);
+        setTimeout(() => setCopiedMsgId(null), 2000);
+      });
+    } catch {
+      // no-op if clipboard entirely unavailable
+    }
   };
 
   useEffect(() => {
@@ -63,24 +102,35 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onIngestClick }) =
     setLoading(true);
 
     try {
-      const res = await fetch('/api/chat', {
+      // Connect to secure FastAPI backend
+      const res = await fetch('http://127.0.0.1:8000/api/query', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-API-Key': 'ECO_RAG_SECURE_KEY_2026' // Must match the backend API_SECRET_KEY
+        },
         body: JSON.stringify({ query: q.trim() })
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate response');
+      if (!res.ok) throw new Error(data.detail || 'Failed to generate response');
 
       const assistantMsg: RAGMessage = {
         id: `assistant-${Date.now()}`,
         sender: 'assistant',
-        text: data.answer,
+        text: data.synthesized_answer || data.answer,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        retrievedChunks: data.retrievedChunks || [],
-        processingTimeMs: data.processingTimeMs,
-        modelUsed: data.modelUsed,
-        guardrailTriggered: data.guardrailTriggered
+        // Map FastAPI source texts into the existing Chunk structure
+        retrievedChunks: data.sources ? data.sources.map((src: string, i: number) => ({
+          id: `src-${i}`,
+          documentId: 'fastapi-backend',
+          documentTitle: 'Municipal Policy DB',
+          clause: `Retrieved Excerpt ${i + 1}`,
+          text: src
+        })) : [],
+        processingTimeMs: data.processingTimeMs || 0,
+        modelUsed: data.modelUsed || 'FastAPI Secure RAG',
+        guardrailTriggered: data.guardrailTriggered || false
       };
 
       setMessages(prev => [...prev, assistantMsg]);
@@ -123,6 +173,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onIngestClick }) =
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    // BUG 8 FIX: revoke object URL to prevent memory leak
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -213,9 +265,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onIngestClick }) =
                   </div>
                 )}
 
-                {/* Text Content */}
-                <div className="whitespace-pre-wrap space-y-2">
-                  {msg.text}
+                {/* Text Content — BUG 5 FIX: render markdown instead of raw text */}
+                <div className="space-y-1 leading-relaxed">
+                  {renderMarkdown(msg.text)}
                 </div>
 
                 {/* Retrieved Sources & Chunks Toggle */}
@@ -285,11 +337,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ onIngestClick }) =
       <div className="py-3">
         <p className="text-xs font-semibold text-stone-500 mb-2 uppercase tracking-wider">Suggested Municipal Policy Queries:</p>
         <div className="flex flex-wrap gap-2">
+          {/* BUG 6 FIX: disable chips while loading to prevent double requests */}
           {SAMPLE_QUERIES.map((q, idx) => (
             <button
               key={idx}
               onClick={() => handleSendMessage(q)}
-              className="text-xs bg-white hover:bg-emerald-50 text-stone-700 hover:text-emerald-800 border border-stone-200 hover:border-emerald-300 px-3 py-1.5 rounded-full transition-all shadow-xs text-left"
+              disabled={loading}
+              className="text-xs bg-white hover:bg-emerald-50 text-stone-700 hover:text-emerald-800 border border-stone-200 hover:border-emerald-300 px-3 py-1.5 rounded-full transition-all shadow-xs text-left disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {q}
             </button>
