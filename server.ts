@@ -60,10 +60,12 @@ function chunkText(documentId: string, documentTitle: string, text: string): Chu
   return chunks;
 }
 
-// Generate all initial chunks
+// Generate all initial chunks and fix hardcoded chunksCount on seed data
 let allChunks: Chunk[] = [];
 bylawsDB.forEach(bylaw => {
-  allChunks.push(...chunkText(bylaw.id, bylaw.title, bylaw.content));
+  const computed = chunkText(bylaw.id, bylaw.title, bylaw.content);
+  bylaw.chunksCount = computed.length; // BUG 1 FIX: recompute instead of relying on hardcoded value
+  allChunks.push(...computed);
 });
 
 // Simple semantic/keyword retrieval scoring
@@ -81,20 +83,22 @@ function retrieveRelevantChunks(query: string, topK = 3): Chunk[] {
       if (titleLower.includes(word)) matchScore += 4;
     });
 
-    // Add slight deterministic pseudo-randomness for variety if generic
     const similarityScore = Math.min(0.98, 0.65 + (matchScore * 0.05));
     return {
       chunk,
-      score: matchScore > 0 ? similarityScore : 0.40
+      score: matchScore, // BUG 2 FIX: keep raw match score for filtering
+      similarityScore: matchScore > 0 ? similarityScore : 0
     };
   });
 
-  scored.sort((a, b) => b.score - a.score);
+  // BUG 2 FIX: only return chunks that actually matched at least one keyword
+  const matched = scored.filter(item => item.score > 0);
+  const pool = matched.length > 0 ? matched : scored; // graceful fallback if nothing matched
+  pool.sort((a, b) => b.score - a.score);
   
-  // Return topK chunks with similarity score attached
-  return scored.slice(0, topK).map(item => ({
+  return pool.slice(0, topK).map(item => ({
     ...item.chunk,
-    similarityScore: item.score
+    similarityScore: item.similarityScore
   }));
 }
 
@@ -136,7 +140,8 @@ async function startServer() {
         id: newId,
         title,
         category: category || 'Waste Management',
-        code: code || `BY-${new Date().getFullYear()}-${Math.floor(Math.random() * 899 + 100)}`,
+        // BUG 4 FIX: use timestamp suffix instead of Math.random() to avoid collisions
+        code: code || `BY-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`,
         effectiveDate: new Date().toISOString().split('T')[0],
         summary: summary || title,
         content,
@@ -160,16 +165,84 @@ async function startServer() {
         return res.status(400).json({ error: "Query is required." });
       }
 
-      // 1. Semantic Retrieval from ChromaDB simulation
-      const retrievedChunks = retrieveRelevantChunks(query, 3);
+      const apiKey = process.env.GEMINI_API_KEY;
+      let ai: GoogleGenAI | null = null;
+      if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
+        ai = new GoogleGenAI({ apiKey });
+      }
 
-      // 2. Build Context Assembly
-      const contextText = retrievedChunks
-        .map((c, i) => `[Source ${i + 1}: ${c.clause}]\n${c.text}`)
-        .join("\n\n");
+      // 1. Router Agent: Analyze Intent
+      let intent = "policy";
+      if (ai) {
+        try {
+          const routerPrompt = `Analyze the intent of the following user query: "${query}".
+Return ONLY ONE of the following words: "policy", "complaint", "education".
+- Return "policy" if it asks about rules, laws, schedules, guidelines, or factual information.
+- Return "complaint" if it reports an issue, grievance, violation, or asks to file a ticket.
+- Return "education" if it specifically asks for a simple, child-friendly, or educational explanation.`;
+          const routeRes = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: routerPrompt });
+          const detected = routeRes.text?.toLowerCase().trim() || "policy";
+          if (detected.includes("complaint")) intent = "complaint";
+          else if (detected.includes("education")) intent = "education";
+        } catch (e) {
+          console.error("Router agent failed, defaulting to policy", e);
+        }
+      } else {
+        // Fallback keyword routing
+        const qLower = query.toLowerCase();
+        if (qLower.includes("complain") || qLower.includes("report") || qLower.includes("issue") || qLower.includes("ticket")) {
+          intent = "complaint";
+        } else if (qLower.includes("child") || qLower.includes("kid") || qLower.includes("simple") || qLower.includes("explain to")) {
+          intent = "education";
+        }
+      }
 
-      // 3. System Prompt with strict guardrails
-      const systemPrompt = `You are "EcoPolicy AI", an expert assistant specializing in municipal sustainability, waste management bylaws, and environmental regulations.
+      let answer = "";
+      let modelUsed = "gemini-2.5-flash";
+      let guardrailTriggered = false;
+      let retrievedChunks: Chunk[] = [];
+
+      // 2. Route Execution
+      if (intent === "complaint") {
+        // ACTION AGENT: Draft Complaint Ticket
+        const prompt = `You are a Municipal Action Agent. The user wants to report an issue: "${query}".
+Draft a formal municipal grievance ticket template. Include:
+- A hypothetical Ticket ID (e.g. TKT-2026-XYZ)
+- The reported issue summary
+- Status: Pending Review
+- Next steps for the user.`;
+        if (ai) {
+          try {
+            const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: prompt });
+            answer = response.text || "";
+            modelUsed = "gemini-2.5-flash (Action Agent)";
+          } catch (e) {
+            answer = "Error generating ticket. Please try again.";
+          }
+        } else {
+          answer = `**Ticket ID:** TKT-${Date.now().toString().slice(-6)}\n**Status:** Pending\n**Issue:** ${query}\n\n*Your grievance has been noted (Fallback Mode).*`;
+          modelUsed = "fallback (Action Agent)";
+        }
+      } else if (intent === "education") {
+        // SUMMARIZATION AGENT: Child-friendly
+        const prompt = `You are an Educational Summarization Agent for a municipality. Explain the following query to a 10-year-old child in a fun, simple, and engaging way, using emojis: "${query}".`;
+        if (ai) {
+          try {
+            const response = await ai.models.generateContent({ model: "gemini-2.5-flash", contents: prompt });
+            answer = response.text || "";
+            modelUsed = "gemini-2.5-flash (Edu Agent)";
+          } catch (e) {
+            answer = "Error generating explanation. Please try again.";
+          }
+        } else {
+          answer = `Hey there! 🌍 We need to keep our city clean and green! Remember to always recycle and save water. (Fallback Mode)`;
+          modelUsed = "fallback (Edu Agent)";
+        }
+      } else {
+        // POLICY AGENT: RAG Pipeline
+        retrievedChunks = retrieveRelevantChunks(query, 3);
+        const contextText = retrievedChunks.map((c, i) => `[Source ${i + 1}: ${c.clause}]\n${c.text}`).join("\n\n");
+        const systemPrompt = `You are "EcoPolicy AI", an expert assistant specializing in municipal sustainability, waste management bylaws, and environmental regulations.
 Your primary job is to answer user queries accurately based strictly on retrieved policy text, adhering to responsible AI guidelines (transparency, no hallucinations, and zero PII collection).
 
 Core Objectives:
@@ -178,55 +251,46 @@ Core Objectives:
 3. If a user asks a question that cannot be answered using the provided context or general municipal laws, explicitly state: "I cannot find specific guidance for this in the current municipal policy guidelines." Do not make up answers.
 
 Retrieved Context Chunks:
-${contextText}
-`;
+${contextText}`;
 
-      let answer = "";
-      let modelUsed = "gemini-2.5-flash";
-      let guardrailTriggered = false;
-
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
-        try {
-          const ai = new GoogleGenAI({ apiKey });
-          const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: [
-              { role: 'user', parts: [{ text: systemPrompt + `\n\nUser Question: ${query}` }] }
-            ],
-            config: {
-              temperature: 0.2,
-            }
-          });
-          answer = response.text || "";
-        } catch (apiErr) {
-          console.error("Gemini API Error, falling back to local grounded response generator:", apiErr);
-          modelUsed = "fallback-grounded-engine";
-        }
-      } else {
-        modelUsed = "fallback-grounded-engine (No API Key)";
-      }
-
-      // Fallback or if answer is empty
-      if (!answer.trim()) {
-        if (retrievedChunks.length > 0 && retrievedChunks[0].similarityScore && retrievedChunks[0].similarityScore > 0.5) {
-          answer = `Based on the official municipal guidelines (${retrievedChunks[0].documentTitle}, ${retrievedChunks[0].clause}):\n\n${retrievedChunks[0].text}\n\n*This answer is synthesized directly from verified municipal legislation to ensure 100% factual accuracy and compliance with sustainability protocols.*`;
+        if (ai) {
+          try {
+            const response = await ai.models.generateContent({
+              model: "gemini-2.5-flash",
+              contents: [{ role: 'user', parts: [{ text: systemPrompt + `\n\nUser Question: ${query}` }] }],
+              config: { temperature: 0.2 }
+            });
+            answer = response.text || "";
+            modelUsed = "gemini-2.5-flash (Policy Agent)";
+          } catch (apiErr) {
+            console.error("Gemini API Error:", apiErr);
+            modelUsed = "fallback-grounded (Policy Agent)";
+            guardrailTriggered = true;
+          }
         } else {
-          answer = "I cannot find specific guidance for this in the current municipal policy guidelines.";
-          guardrailTriggered = true;
+          modelUsed = "fallback-grounded (No API Key)";
+        }
+
+        if (!answer.trim()) {
+          const topChunk = retrievedChunks[0];
+          if (topChunk && topChunk.similarityScore && topChunk.similarityScore > 0.5) {
+            guardrailTriggered = false;
+            answer = `**Based on the official municipal guidelines** — *${topChunk.documentTitle}*, ${topChunk.clause}:\n\n${topChunk.text}\n\n---\n*This answer is synthesized directly from verified municipal legislation to ensure factual accuracy.*`;
+          } else {
+            answer = "I cannot find specific guidance for this in the current municipal policy guidelines.";
+            guardrailTriggered = true;
+          }
         }
       }
-
-      const processingTimeMs = Date.now() - startTime;
 
       res.json({
         answer,
         retrievedChunks,
-        processingTimeMs,
+        processingTimeMs: Date.now() - startTime,
         modelUsed,
-        guardrailTriggered
+        guardrailTriggered,
+        intent // Optional: return intent for debugging
       });
-
     } catch (err: any) {
       console.error("Chat error:", err);
       res.status(500).json({ error: err.message || "Internal server error" });
